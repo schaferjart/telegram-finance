@@ -48,6 +48,7 @@ CB_PAYER_PREFIX = "payer:"
 CB_SPLIT_TOGGLE_PREFIX = "split_toggle:"
 CB_SPLIT_DONE = "split_done"
 CB_SPLIT_BACK = "split_back"
+CB_SPLIT_CANCEL = "split_cancel"
 
 # Settings
 EXPENSE_LIST_LIMIT = 20
@@ -60,12 +61,22 @@ MANAGE_MEMBER = range(1)
 
 # Dynamic Keyboards
 def get_main_keyboard():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton("Add Expense"), KeyboardButton("Add Chore")],
-        [KeyboardButton("Standings"), KeyboardButton("List Expenses")],
-        [KeyboardButton("Check Beer Owed"), KeyboardButton("Manage Members")],
-        [KeyboardButton("Set Weekly Report"), KeyboardButton("Cancel")],
-    ], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton("Add Expense"),
+                KeyboardButton("Add Chore"),
+                KeyboardButton("List Expenses"),
+            ],
+            [
+                KeyboardButton("Standings"),
+                KeyboardButton("Check Beer Owed"),
+                KeyboardButton("Manage Members"),
+            ],
+            [KeyboardButton("Set Weekly Report"), KeyboardButton("Cancel")],
+        ],
+        resize_keyboard=True,
+    )
 
 
 def get_member_keyboard(data):
@@ -87,11 +98,16 @@ def build_split_inline_kb(members, selected):
     for m in members:
         picked = m in selected
         label = f"{'✅ ' if picked else ''}{m}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"{CB_SPLIT_TOGGLE_PREFIX}{m}")])
-    rows.append([
-        InlineKeyboardButton("⬅️ Back", callback_data=CB_SPLIT_BACK),
-        InlineKeyboardButton("✅ Done", callback_data=CB_SPLIT_DONE),
-    ])
+        rows.append(
+            [InlineKeyboardButton(label, callback_data=f"{CB_SPLIT_TOGGLE_PREFIX}{m}")]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data=CB_SPLIT_BACK),
+            InlineKeyboardButton("✅ Done", callback_data=CB_SPLIT_DONE),
+            InlineKeyboardButton("✖️ Cancel", callback_data=CB_SPLIT_CANCEL),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -223,6 +239,13 @@ async def expense_split_cb(update: Update, context: CallbackContext) -> int:
             "Select payer:", reply_markup=build_payer_inline_kb(data["members"])
         )
         return EXPENSE_PAYER
+
+    if query.data == CB_SPLIT_CANCEL:
+        await query.edit_message_text("Expense entry cancelled.")
+        await query.message.reply_text(
+            "Cancelled. Back to main menu.", reply_markup=get_main_keyboard()
+        )
+        return ConversationHandler.END
 
     if query.data == CB_SPLIT_DONE:
         selected = list(context.user_data.get("split_with", []))
@@ -578,14 +601,17 @@ def main():
             EXPENSE_SPLIT: [
                 CallbackQueryHandler(
                     expense_split_cb,
-                    pattern=r"^(?:split_toggle:|split_done|split_back)$",
+                    pattern=r"^(?:split_toggle:.*|split_done|split_back|split_cancel)$",
                 )
             ],
             ConversationHandler.TIMEOUT: [
                 MessageHandler(filters.ALL, on_timeout)
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex("^Cancel$"), cancel),
+        ],
         conversation_timeout=300,
     )
     app.add_handler(expense_conv)
@@ -600,7 +626,10 @@ def main():
                 MessageHandler(filters.ALL, on_timeout)
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex("^Cancel$"), cancel),
+        ],
         conversation_timeout=300,
     )
     app.add_handler(manage_conv)
@@ -618,7 +647,10 @@ def main():
                 MessageHandler(filters.ALL, on_timeout)
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex("^Cancel$"), cancel),
+        ],
         conversation_timeout=300,
     )
     app.add_handler(chore_conv)
