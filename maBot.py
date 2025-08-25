@@ -554,6 +554,14 @@ def setup_weekly_job(application):
     )
 
 
+async def send_alive(context: CallbackContext) -> None:
+    """Send a periodic heartbeat message to confirm the bot is running."""
+    try:
+        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text="I'm alive")
+    except TelegramError as e:
+        logger.error(f"Failed to send heartbeat: {e}")
+
+
 async def cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text(
         "Cancelled. Back to main menu.", reply_markup=get_main_keyboard()
@@ -656,6 +664,12 @@ def main():
     app.add_handler(chore_conv)
 
     setup_weekly_job(app)
+    app.job_queue.run_repeating(
+        send_alive,
+        interval=timedelta(hours=4).total_seconds(),
+        first=0,
+        name="heartbeat",
+    )
     logger.info("Bot running...")
     app.run_polling()
 
