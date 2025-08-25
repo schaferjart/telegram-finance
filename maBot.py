@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Bot Token
 from config import TOKEN
 from config import GROUP_CHAT_ID
+from config import BOT_HANDLER_ID
 
 # Data storage
 DATA_FILE = "wg_data_beta.json"
@@ -516,12 +517,12 @@ async def check_weekly_penalties(context: CallbackContext) -> None:
 
     current_date = datetime.now().strftime("%Y-%m-%d")
     if violators:
-        report = f"📊 Weekly Chore Report ({current_date}):\n\n"
-        report += f"👑 Leader: {leader} with {leader_points} points\n\n"
+        report = f"Weekly Chore Report ({current_date}):\n\n"
+        report += f"Leader: {leader} with {leader_points} points\n\n"
         report += "Penalties:\n" + "\n".join(violators)
     else:
-        report = f"📊 Weekly Chore Report ({current_date}):\n\n"
-        report += f"👑 Leader: {leader} with {leader_points} points\n\n"
+        report = f"Weekly Chore Report ({current_date}):\n\n"
+        report += f"Leader: {leader} with {leader_points} points\n\n"
         report += "Everyone is keeping up with their chores! No penalties this week. 🎉"
 
     try:
@@ -557,7 +558,7 @@ def setup_weekly_job(application):
 async def send_alive(context: CallbackContext) -> None:
     """Send a periodic heartbeat message to confirm the bot is running."""
     try:
-        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text="I'm alive")
+        await context.bot.send_message(chat_id=BOT_HANDLER_ID, text="I'm alive")
     except TelegramError as e:
         logger.error(f"Failed to send heartbeat: {e}")
 
