@@ -1,6 +1,9 @@
-# Ignore bot token and user data
-wg_data_beta.json
-*.pyc
-__pycache__/
-.env
+finance_data.json
 config.py
+report.png
+temp_report.html
+pycache/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store

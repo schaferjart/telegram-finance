@@ -2,8 +2,8 @@
 
 ## Enter your bot token and handler ID below
 
-TOKEN = '7633203568:AAFkgEpUKyHMMw3DXeuiIPLo-JEKLL1QEfY'
-BOT_HANDLER_ID = 't.me/MillionParaBot'
+TOKEN = 'YOUR_BOT_TOKEN'
+BOT_HANDLER_ID = 'YOUR_BOT_HANDLER'
 
 
 # TRANSACTION SETTINGS
