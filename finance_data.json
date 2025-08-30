@@ -1,0 +1,179 @@
+{
+    "transactions": [
+        {
+            "date": "2025-08-30",
+            "type": "groceries",
+            "amount_sent": 50.0,
+            "currency_sent": "CHF",
+            "from": "Revolut",
+            "amount_received": 0.0,
+            "currency_received": "",
+            "to": "",
+            "status": "closed",
+            "info": "",
+            "description": "Groceries - 50.0 CHF"
+        },
+        {
+            "date": "2025-08-30",
+            "type": "transaction",
+            "amount_sent": 0.0,
+            "currency_sent": "CHF",
+            "from": "Revolut",
+            "amount_received": 90.0,
+            "currency_received": "CHF",
+            "to": "Revolut",
+            "status": "closed",
+            "info": "Gift",
+            "description": "Transaction transaction"
+        },
+        {
+            "date": "2025-08-30",
+            "type": "transaction",
+            "amount_sent": 50.0,
+            "currency_sent": "CHF",
+            "from": "Revolut",
+            "amount_received": 50.0,
+            "currency_received": "CHF",
+            "to": "Revolut",
+            "status": "closed",
+            "info": "Useless",
+            "description": "Transaction transaction"
+        },
+        {
+            "date": "2025-08-30",
+            "type": "groceries",
+            "amount_sent": 100.0,
+            "currency_sent": "CHF",
+            "from": "Revolut",
+            "amount_received": 0.0,
+            "currency_received": "",
+            "to": "",
+            "status": "closed",
+            "info": "",
+            "description": "Groceries - 100.0 CHF"
+        },
+        {
+            "date": "2025-08-30",
+            "type": "drink",
+            "amount_sent": 200.0,
+            "currency_sent": "BTC",
+            "from": "Revolut",
+            "amount_received": 0.0,
+            "currency_received": "",
+            "to": "",
+            "status": "closed",
+            "info": "",
+            "description": "Drink - 200.0 BTC"
+        },
+        {
+            "date": "2025-08-30",
+            "type": "drink",
+            "amount_sent": 2.0,
+            "currency_sent": "BTC",
+            "from": "Binance",
+            "amount_received": 0.0,
+            "currency_received": "",
+            "to": "",
+            "status": "closed",
+            "info": "123445",
+            "description": "Drink - 2.0 BTC"
+        }
+    ],
+    "accounts": [
+        "Revolut",
+        "One",
+        "Kraken",
+        "Binance"
+    ],
+    "balances": {
+        "Revolut": {
+            "settled": {
+                "CHF": -60.0,
+                "BTC": -200.0
+            },
+            "pending": {}
+        },
+        "One": {
+            "settled": {},
+            "pending": {}
+        },
+        "Kraken": {
+            "settled": {},
+            "pending": {}
+        },
+        "Binance": {
+            "settled": {
+                "BTC": -2.0
+            },
+            "pending": {}
+        }
+    },
+    "spending_categories": {
+        "groceries": {
+            "transactions": [
+                {
+                    "date": "2025-08-30",
+                    "type": "groceries",
+                    "amount_sent": 50.0,
+                    "currency_sent": "CHF",
+                    "from": "Revolut",
+                    "amount_received": 0.0,
+                    "currency_received": "",
+                    "to": "",
+                    "status": "closed",
+                    "info": "",
+                    "description": "Groceries - 50.0 CHF"
+                },
+                {
+                    "date": "2025-08-30",
+                    "type": "groceries",
+                    "amount_sent": 100.0,
+                    "currency_sent": "CHF",
+                    "from": "Revolut",
+                    "amount_received": 0.0,
+                    "currency_received": "",
+                    "to": "",
+                    "status": "closed",
+                    "info": "",
+                    "description": "Groceries - 100.0 CHF"
+                }
+            ],
+            "total": {
+                "CHF": 150.0
+            }
+        },
+        "drink": {
+            "transactions": [
+                {
+                    "date": "2025-08-30",
+                    "type": "drink",
+                    "amount_sent": 200.0,
+                    "currency_sent": "BTC",
+                    "from": "Revolut",
+                    "amount_received": 0.0,
+                    "currency_received": "",
+                    "to": "",
+                    "status": "closed",
+                    "info": "",
+                    "description": "Drink - 200.0 BTC"
+                },
+                {
+                    "date": "2025-08-30",
+                    "type": "drink",
+                    "amount_sent": 2.0,
+                    "currency_sent": "BTC",
+                    "from": "Binance",
+                    "amount_received": 0.0,
+                    "currency_received": "",
+                    "to": "",
+                    "status": "closed",
+                    "info": "123445",
+                    "description": "Drink - 2.0 BTC"
+                }
+            ],
+            "total": {
+                "BTC": 202.0
+            }
+        }
+    }
+}

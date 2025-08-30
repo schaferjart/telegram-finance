@@ -1,7 +1,9 @@
 import json
 import logging
-import pytz
+import os
 from datetime import datetime, timedelta
+import markdown2
+import weasyprint
 
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
@@ -13,19 +15,47 @@ from telegram.ext import (
 )
 from telegram.error import TelegramError
 
+from markdown2 import markdown
+from weasyprint import HTML
+
 # Set up logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Bot Token
-from config import TOKEN
-from config import GROUP_CHAT_ID
-from config import BOT_HANDLER_ID
+# Import all config variables
+try:
+    from config import (
+        TOKEN, BOT_HANDLER_ID, CURRENCIES, TRANSACTION_TYPES, TRANSACTION_STATUSES,
+        SIMPLE_TRANSACTION_TYPES, SPENDING_CATEGORIES, TRANSACTION_LIST_LIMIT,
+        CONVERSATION_TIMEOUT, HEARTBEAT_INTERVAL_HOURS, DATA_FILE,
+        BTN_ADD_TRANSACTION, BTN_LIST_TRANSACTIONS, BTN_GENERATE_REPORT,
+        BTN_MANAGE_ACCOUNTS, BTN_DELETE_ALL_DATA, BTN_GENERATE_IMAGE_REPORT, BTN_CANCEL, BTN_BACK, BTN_DONE,
+        BTN_YES, BTN_NONE, MSG_BOT_ACTIVE, MSG_CANCELLED, MSG_SESSION_TIMEOUT,
+        MSG_SELECT_TYPE, MSG_ENTER_AMOUNT_SENT, MSG_SELECT_CURRENCY,
+        MSG_SELECT_FROM_ACCOUNT, MSG_ENTER_AMOUNT_RECEIVED, MSG_SELECT_CURRENCY_RECEIVED,
+        MSG_SELECT_TO_ACCOUNT, MSG_SELECT_STATUS, MSG_ADD_INFO_QUESTION,
+        MSG_ADD_INFO_DETAILS, MSG_ENTER_INFO, MSG_ACCOUNTS_CURRENT, MSG_ACCOUNTS_EMPTY,
+        MSG_ACCOUNTS_CLOSED, MSG_ACCOUNT_REMOVED, MSG_ACCOUNT_ADDED, MSG_NO_ACCOUNTS,
+        MSG_USE_MANAGE_ACCOUNTS, MSG_INVALID_AMOUNT, MSG_INVALID_AMOUNT_RECEIVED,
+        MSG_NO_TRANSACTIONS, MSG_TRANSACTION_ADDED_SIMPLE, MSG_TRANSACTION_ADDED_FULL,
+        MSG_CONFIRM_DELETE, MSG_DATA_DELETED, MSG_DELETE_CANCELLED, CONFIRM_DELETE_TEXT,
+        REPORT_HEADER_TRANSACTIONS, REPORT_HEADER_LOG, REPORT_HEADER_ACCOUNTS,
+        REPORT_HEADER_SPENDING, REPORT_BALANCE_SETTLED, REPORT_BALANCE_PENDING,
+        DESC_TEMPLATE_SIMPLE, DESC_TEMPLATE_COMPLEX, TABLE_HEADER, TABLE_SEPARATOR,
+        TABLE_HEADER_FULL
+    )
+except ImportError as e:
+    print(f"Error: config.py file not found or incomplete! Missing: {e}")
+    print("Please ensure all required variables are defined in config.py")
+    exit(1)
 
-# Data storage
-DATA_FILE = "wg_data_beta.json"
+# Validate token
+if not TOKEN or TOKEN == "YOUR_ACTUAL_BOT_TOKEN":
+    print("Error: Please set your actual bot token in config.py")
+    print("Get a token from @BotFather on Telegram")
+    exit(1)
 
 
 def load_data():
@@ -33,7 +63,7 @@ def load_data():
         with open(DATA_FILE, "r") as file:
             return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
-        default_data = {"expenses": [], "chores": {}, "penalties": {}, "members": []}
+        default_data = {"transactions": [], "accounts": [], "balances": {}, "spending_categories": {}}
         with open(DATA_FILE, "w") as file:
             json.dump(default_data, file, indent=4)
         return default_data
@@ -45,19 +75,22 @@ def save_data(data):
 
 
 # Callback data prefixes
-CB_PAYER_PREFIX = "payer:"
-CB_SPLIT_TOGGLE_PREFIX = "split_toggle:"
-CB_SPLIT_DONE = "split_done"
-CB_SPLIT_BACK = "split_back"
-CB_SPLIT_CANCEL = "split_cancel"
-
-# Settings
-EXPENSE_LIST_LIMIT = 20
+CB_FROM_PREFIX = "from:"
+CB_TO_PREFIX = "to:"
+CB_TYPE_PREFIX = "type:"
+CB_STATUS_PREFIX = "status:"
+CB_CURRENCY_SENT_PREFIX = "curr_sent:"
+CB_CURRENCY_RECEIVED_PREFIX = "curr_recv:"
+CB_INFO_PREFIX = "info:"
+CB_DONE = "done"
+CB_BACK = "back"
+CB_CANCEL = "cancel"
+CB_DELETE_ALL = "delete_all"
 
 # States for conversation handler
-EXPENSE_DESCRIPTION, EXPENSE_AMOUNT, EXPENSE_PAYER, EXPENSE_SPLIT = range(4)
-CHORE_USER, CHORE_MINUTES = range(2)
-MANAGE_MEMBER = range(1)
+TRANS_TYPE, TRANS_AMOUNT_SENT, TRANS_CURRENCY_SENT, TRANS_FROM, \
+TRANS_AMOUNT_RECEIVED, TRANS_CURRENCY_RECEIVED, TRANS_TO, TRANS_STATUS, TRANS_INFO = range(9)
+MANAGE_ACCOUNT, CONFIRM_DELETE = range(2)
 
 
 # Dynamic Keyboards
@@ -65,507 +98,489 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(
         [
             [
-                KeyboardButton("Add Expense"),
-                KeyboardButton("Add Chore"),
-                KeyboardButton("List Expenses"),
+                KeyboardButton(BTN_ADD_TRANSACTION),
+                KeyboardButton(BTN_LIST_TRANSACTIONS),
             ],
             [
-                KeyboardButton("Standings"),
-                KeyboardButton("Check Beer Owed"),
-                KeyboardButton("Manage Members"),
+                KeyboardButton(BTN_GENERATE_REPORT),
+                KeyboardButton(BTN_MANAGE_ACCOUNTS),
             ],
-            [KeyboardButton("Set Weekly Report"), KeyboardButton("Cancel")],
+            [
+                KeyboardButton(BTN_DELETE_ALL_DATA),
+                KeyboardButton(BTN_CANCEL),
+            ],
+            [KeyboardButton(BTN_GENERATE_IMAGE_REPORT)
+            ]
         ],
         resize_keyboard=True,
     )
 
 
-def get_member_keyboard(data):
-    members = data.get("members", [])
-    if not members:
+def get_account_keyboard(data):
+    accounts = data.get("accounts", [])
+    if not accounts:
         return None
-    buttons = [[KeyboardButton(member)] for member in members]
-    buttons.append([KeyboardButton("Done")])
+    buttons = [[KeyboardButton(account)] for account in accounts]
+    buttons.append([KeyboardButton(BTN_DONE)])
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 
-def build_payer_inline_kb(members):
-    rows = [[InlineKeyboardButton(m, callback_data=f"{CB_PAYER_PREFIX}{m}")] for m in members]
+def build_inline_kb(prefix, options):
+    rows = [[InlineKeyboardButton(opt, callback_data=f"{prefix}{opt}")] for opt in options]
     return InlineKeyboardMarkup(rows)
 
 
-def build_split_inline_kb(members, selected):
-    rows = []
-    for m in members:
-        picked = m in selected
-        label = f"{'✅ ' if picked else ''}{m}"
-        rows.append(
-            [InlineKeyboardButton(label, callback_data=f"{CB_SPLIT_TOGGLE_PREFIX}{m}")]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton("⬅️ Back", callback_data=CB_SPLIT_BACK),
-            InlineKeyboardButton("✅ Done", callback_data=CB_SPLIT_DONE),
-            InlineKeyboardButton("✖️ Cancel", callback_data=CB_SPLIT_CANCEL),
-        ]
-    )
-    return InlineKeyboardMarkup(rows)
+def build_type_inline_kb():
+    return build_inline_kb(CB_TYPE_PREFIX, TRANSACTION_TYPES)
+
+
+def build_status_inline_kb():
+    return build_inline_kb(CB_STATUS_PREFIX, TRANSACTION_STATUSES)
+
+
+def build_currency_inline_kb(prefix):
+    return build_inline_kb(prefix, CURRENCIES)
+
+
+def build_info_inline_kb():
+    options = [BTN_YES, BTN_NONE]
+    return build_inline_kb(CB_INFO_PREFIX, options)
+
+
+def build_delete_confirmation_kb():
+    options = [BTN_YES, BTN_CANCEL]
+    return build_inline_kb(CB_DELETE_ALL, options)
 
 
 async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(
-        "WG Bot is active! Use the buttons below:", reply_markup=get_main_keyboard()
+        MSG_BOT_ACTIVE, reply_markup=get_main_keyboard()
     )
 
 
-# Manage Members
-async def manage_members(update: Update, context: CallbackContext) -> int:
-    data = load_data()
-    if data["members"]:
-        members_list = ", ".join(data["members"])
-        txt = (
-            f"Current members: {members_list}\n\n"
-            "Send a name to add/remove.\n"
-            "Or type 'Back' to return without changes."
+# Delete All Data
+async def delete_all_data(update: Update, context: CallbackContext) -> int:
+    await update.message.reply_text(
+        MSG_CONFIRM_DELETE,
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True),
+    )
+    return CONFIRM_DELETE
+
+
+async def confirm_delete(update: Update, context: CallbackContext) -> int:
+    text = update.message.text.strip()
+    if text == CONFIRM_DELETE_TEXT:
+        # Delete all data
+        default_data = {"transactions": [], "accounts": [], "balances": {}, "spending_categories": {}}
+        save_data(default_data)
+        await update.message.reply_text(
+            MSG_DATA_DELETED, reply_markup=get_main_keyboard()
+        )
+    elif text.lower() == BTN_BACK.lower():
+        await update.message.reply_text(
+            MSG_DELETE_CANCELLED, reply_markup=get_main_keyboard()
         )
     else:
-        txt = "No members yet. Send a name to add. Or type 'Back' to return."
+        await update.message.reply_text(
+            MSG_DELETE_CANCELLED, reply_markup=get_main_keyboard()
+        )
+    return ConversationHandler.END
+
+
+# Manage Accounts
+async def manage_accounts(update: Update, context: CallbackContext) -> int:
+    data = load_data()
+    if data["accounts"]:
+        accounts_list = ", ".join(data["accounts"])
+        txt = MSG_ACCOUNTS_CURRENT.format(accounts=accounts_list)
+    else:
+        txt = MSG_ACCOUNTS_EMPTY
 
     await update.message.reply_text(
         txt,
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Back")]], resize_keyboard=True),
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton(BTN_BACK)]], resize_keyboard=True),
     )
-    return MANAGE_MEMBER
+    return MANAGE_ACCOUNT
 
 
-async def modify_members(update: Update, context: CallbackContext) -> int:
+async def modify_accounts(update: Update, context: CallbackContext) -> int:
     data = load_data()
     text = update.message.text.strip()
-    if text.lower() == "back":
+    if text.lower() == BTN_BACK.lower():
         await update.message.reply_text(
-            "Member management closed.", reply_markup=get_main_keyboard()
+            MSG_ACCOUNTS_CLOSED, reply_markup=get_main_keyboard()
         )
         return ConversationHandler.END
 
     name_ci = text.lower()
     existing_index = next(
-        (i for i, m in enumerate(data["members"]) if m.lower() == name_ci), None
+        (i for i, m in enumerate(data["accounts"]) if m.lower() == name_ci), None
     )
     if existing_index is not None:
-        removed = data["members"].pop(existing_index)
-        response = f"Removed {removed} from the household."
+        removed = data["accounts"].pop(existing_index)
+        # Also remove from balances if exists
+        data["balances"].pop(removed, None)
+        response = MSG_ACCOUNT_REMOVED.format(account=removed)
     else:
-        data["members"].append(text)
-        response = f"Added {text} to the household."
+        data["accounts"].append(text)
+        data["balances"][text] = {"settled": {}, "pending": {}}
+        response = MSG_ACCOUNT_ADDED.format(account=text)
 
     save_data(data)
     await update.message.reply_text(response, reply_markup=get_main_keyboard())
     return ConversationHandler.END
 
 
-# Expense flow
-async def start_expense(update: Update, context: CallbackContext) -> int:
+# Transaction flow
+async def start_transaction(update: Update, context: CallbackContext) -> int:
     context.user_data.clear()
     await update.message.reply_text(
-        "Enter a short description for the expense (e.g., 'Groceries Migros'):",
-        reply_markup=ReplyKeyboardRemove(),
+        MSG_SELECT_TYPE, 
+        reply_markup=build_type_inline_kb()
     )
-    return EXPENSE_DESCRIPTION
+    return TRANS_TYPE
 
 
-async def expense_description(update: Update, context: CallbackContext) -> int:
-    desc = update.message.text.strip()
-    if not desc:
-        await update.message.reply_text("Please provide a non-empty description.")
-        return EXPENSE_DESCRIPTION
-    context.user_data["description"] = desc
-    await update.message.reply_text("Enter the amount (e.g. 42.50):")
-    return EXPENSE_AMOUNT
+async def trans_type_cb(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data.startswith(CB_TYPE_PREFIX):
+        trans_type = query.data[len(CB_TYPE_PREFIX):]
+        context.user_data["type"] = trans_type
+        
+        # Set defaults for simple transaction types
+        if trans_type in SIMPLE_TRANSACTION_TYPES:
+            context.user_data["amount_received"] = 0.0
+            context.user_data["currency_received"] = ""
+            context.user_data["to"] = ""
+            context.user_data["status"] = "closed"
+        
+        await query.edit_message_text(MSG_ENTER_AMOUNT_SENT)
+        return TRANS_AMOUNT_SENT
+    return TRANS_TYPE
 
 
-async def expense_amount(update: Update, context: CallbackContext) -> int:
+async def trans_amount_sent(update: Update, context: CallbackContext) -> int:
     try:
-        context.user_data["amount"] = round(
-            float(update.message.text.replace(",", ".")), 2
-        )
+        context.user_data["amount_sent"] = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("Invalid amount. Try again (e.g. 42.50).")
-        return EXPENSE_AMOUNT
-
-    data = load_data()
-    if not data.get("members"):
-        await update.message.reply_text(
-            "No members found. Please add members first.",
-            reply_markup=get_main_keyboard(),
-        )
-        return ConversationHandler.END
-
-    await update.message.reply_text("Who paid?", reply_markup=ReplyKeyboardRemove())
-    await update.message.reply_html(
-        "<b>Select payer:</b>",
-        reply_markup=build_payer_inline_kb(data["members"]),
+        await update.message.reply_text(MSG_INVALID_AMOUNT)
+        return TRANS_AMOUNT_SENT
+    
+    await update.message.reply_text(
+        MSG_SELECT_CURRENCY, 
+        reply_markup=build_currency_inline_kb(CB_CURRENCY_SENT_PREFIX)
     )
-    return EXPENSE_PAYER
+    return TRANS_CURRENCY_SENT
 
 
-async def expense_payer_cb(update: Update, context: CallbackContext) -> int:
+async def trans_currency_sent_cb(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     await query.answer()
-    data = load_data()
-    if query.data.startswith(CB_PAYER_PREFIX):
-        payer = query.data[len(CB_PAYER_PREFIX) :]
-        context.user_data["payer"] = payer
-        context.user_data["split_with"] = set()
-        await query.edit_message_text(
-            "Select who shares the expense (toggle). Then press ✅ Done."
+    if query.data.startswith(CB_CURRENCY_SENT_PREFIX):
+        currency = query.data[len(CB_CURRENCY_SENT_PREFIX):]
+        context.user_data["currency_sent"] = currency
+        
+        data = load_data()
+        if not data.get("accounts"):
+            await query.edit_message_text(MSG_NO_ACCOUNTS)
+            await update.callback_query.message.reply_text(
+                MSG_USE_MANAGE_ACCOUNTS,
+                reply_markup=get_main_keyboard()
+            )
+            return ConversationHandler.END
+            
+        await query.edit_message_text(MSG_SELECT_FROM_ACCOUNT)
+        await update.callback_query.message.reply_text(
+            MSG_SELECT_FROM_ACCOUNT, 
+            reply_markup=build_inline_kb(CB_FROM_PREFIX, data["accounts"])
         )
-        await query.message.reply_text(
-            "Split with:",
-            reply_markup=build_split_inline_kb(
-                data["members"], context.user_data["split_with"]
-            ),
-        )
-        return EXPENSE_SPLIT
-    return EXPENSE_PAYER
+        return TRANS_FROM
+    return TRANS_CURRENCY_SENT
 
 
-async def expense_split_cb(update: Update, context: CallbackContext) -> int:
+async def trans_from_cb(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     await query.answer()
-    data = load_data()
+    if query.data.startswith(CB_FROM_PREFIX):
+        from_acc = query.data[len(CB_FROM_PREFIX):]
+        context.user_data["from"] = from_acc
+        
+        trans_type = context.user_data.get("type")
+        
+        # For simple transaction types, skip to info step
+        if trans_type in SIMPLE_TRANSACTION_TYPES:
+            await query.edit_message_text(MSG_ADD_INFO_QUESTION)
+            await update.callback_query.message.reply_text(
+                MSG_ADD_INFO_DETAILS,
+                reply_markup=build_info_inline_kb()
+            )
+            return TRANS_INFO
+        
+        # For other transactions, continue normal flow
+        await query.edit_message_text(MSG_ENTER_AMOUNT_RECEIVED)
+        return TRANS_AMOUNT_RECEIVED
+    return TRANS_FROM
 
-    if query.data == CB_SPLIT_BACK:
-        await query.edit_message_text("Who paid?")
-        await query.message.reply_text(
-            "Select payer:", reply_markup=build_payer_inline_kb(data["members"])
-        )
-        return EXPENSE_PAYER
 
-    if query.data == CB_SPLIT_CANCEL:
-        await query.edit_message_text("Expense entry cancelled.")
-        await query.message.reply_text(
-            "Cancelled. Back to main menu.", reply_markup=get_main_keyboard()
-        )
-        return ConversationHandler.END
-
-    if query.data == CB_SPLIT_DONE:
-        selected = list(context.user_data.get("split_with", []))
-        if not selected:
-            await query.answer("Select at least one person.", show_alert=True)
-            return EXPENSE_SPLIT
-
-        amount = context.user_data["amount"]
-        payer = context.user_data["payer"]
-        desc = context.user_data["description"]
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        db = load_data()
-        db["expenses"].append(
-            {
-                "date": today,
-                "description": desc,
-                "amount": amount,
-                "payer": payer,
-                "split_with": selected,
-            }
-        )
-        save_data(db)
-
-        await query.edit_message_text(
-            f"Added expense: {today} — {desc} — {amount:.2f}€\n"
-            f"Payer: {payer}\nSplit with: {', '.join(selected)}"
-        )
-        await query.message.reply_text("Done ✅", reply_markup=get_main_keyboard())
-        return ConversationHandler.END
-
-    if query.data.startswith(CB_SPLIT_TOGGLE_PREFIX):
-        member = query.data[len(CB_SPLIT_TOGGLE_PREFIX) :]
-        sel = context.user_data.get("split_with", set())
-        if member in sel:
-            sel.remove(member)
+async def trans_amount_received(update: Update, context: CallbackContext) -> int:
+    try:
+        amount_received = float(update.message.text.replace(",", "."))
+        context.user_data["amount_received"] = amount_received
+        
+        # If amount is 0, skip currency and account selection
+        if amount_received == 0:
+            context.user_data["currency_received"] = ""
+            context.user_data["to"] = context.user_data["from"]  # Same account
+            await update.message.reply_text(
+                MSG_SELECT_STATUS, 
+                reply_markup=build_status_inline_kb()
+            )
+            return TRANS_STATUS
         else:
-            sel.add(member)
-        context.user_data["split_with"] = sel
-        await query.edit_message_reply_markup(
-            reply_markup=build_split_inline_kb(data["members"], sel)
+            await update.message.reply_text(
+                MSG_SELECT_CURRENCY_RECEIVED, 
+                reply_markup=build_currency_inline_kb(CB_CURRENCY_RECEIVED_PREFIX)
+            )
+            return TRANS_CURRENCY_RECEIVED
+            
+    except ValueError:
+        await update.message.reply_text(MSG_INVALID_AMOUNT_RECEIVED)
+        return TRANS_AMOUNT_RECEIVED
+
+
+async def trans_currency_received_cb(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data.startswith(CB_CURRENCY_RECEIVED_PREFIX):
+        currency = query.data[len(CB_CURRENCY_RECEIVED_PREFIX):]
+        context.user_data["currency_received"] = currency
+        
+        data = load_data()
+        await query.edit_message_text(MSG_SELECT_TO_ACCOUNT)
+        await update.callback_query.message.reply_text(
+            MSG_SELECT_TO_ACCOUNT, 
+            reply_markup=build_inline_kb(CB_TO_PREFIX, data["accounts"])
         )
-        return EXPENSE_SPLIT
+        return TRANS_TO
+    return TRANS_CURRENCY_RECEIVED
 
-    return EXPENSE_SPLIT
+
+async def trans_to_cb(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data.startswith(CB_TO_PREFIX):
+        to_acc = query.data[len(CB_TO_PREFIX):]
+        context.user_data["to"] = to_acc
+        await query.edit_message_text(MSG_SELECT_STATUS)
+        await update.callback_query.message.reply_text(
+            MSG_SELECT_STATUS, 
+            reply_markup=build_status_inline_kb()
+        )
+        return TRANS_STATUS
+    return TRANS_TO
 
 
-# Chore flow
-async def start_chore(update: Update, context: CallbackContext) -> int:
-    data = load_data()
-    keyboard = get_member_keyboard(data)
-    if keyboard:
-        await update.message.reply_text(
-            "Who completed the chore?", reply_markup=keyboard
+async def trans_status_cb(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data.startswith(CB_STATUS_PREFIX):
+        status = query.data[len(CB_STATUS_PREFIX):]
+        context.user_data["status"] = status
+        await query.edit_message_text(MSG_ADD_INFO_QUESTION)
+        await update.callback_query.message.reply_text(
+            MSG_ADD_INFO_DETAILS,
+            reply_markup=build_info_inline_kb()
+        )
+        return TRANS_INFO
+    return TRANS_STATUS
+
+
+async def trans_info_cb(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data.startswith(CB_INFO_PREFIX):
+        info_choice = query.data[len(CB_INFO_PREFIX):]
+        
+        if info_choice == BTN_NONE:
+            context.user_data["info"] = ""
+            return await finalize_transaction(update, context)
+        else:  # BTN_YES
+            await query.edit_message_text(MSG_ENTER_INFO)
+            return TRANS_INFO
+    return TRANS_INFO
+
+
+async def trans_info_text(update: Update, context: CallbackContext) -> int:
+    info = update.message.text.strip()
+    context.user_data["info"] = info
+    return await finalize_transaction(update, context)
+
+
+async def finalize_transaction(update, context):
+    today = datetime.now().strftime("%Y-%m-%d")
+    context.user_data["date"] = today
+    
+    # Generate description based on transaction type
+    trans_type = context.user_data["type"]
+    amount_sent = context.user_data["amount_sent"]
+    currency_sent = context.user_data["currency_sent"]
+    
+    if trans_type in SIMPLE_TRANSACTION_TYPES:
+        description = DESC_TEMPLATE_SIMPLE.format(
+            type=trans_type.capitalize(), 
+            amount=amount_sent, 
+            currency=currency_sent
         )
     else:
-        await update.message.reply_text(
-            "No members found. Please add members first.",
-            reply_markup=get_main_keyboard(),
-        )
-        return ConversationHandler.END
-    return CHORE_USER
+        description = DESC_TEMPLATE_COMPLEX.format(type=trans_type.capitalize())
+    
+    context.user_data["description"] = description
 
-
-async def chore_user(update: Update, context: CallbackContext) -> int:
-    context.user_data["user"] = update.message.text.strip()
-    await update.message.reply_text(
-        "How many minutes did it take?", reply_markup=ReplyKeyboardRemove()
-    )
-    return CHORE_MINUTES
-
-
-async def chore_minutes(update: Update, context: CallbackContext) -> int:
     data = load_data()
-    try:
-        minutes = int(update.message.text)
-        points = minutes // 15
-        user = context.user_data["user"]
-        data["chores"][user] = data["chores"].get(user, 0) + points
-        save_data(data)
-        await update.message.reply_text(
-            f"{user} earned {points} points!", reply_markup=get_main_keyboard()
+    trans = {k: context.user_data[k] for k in ["date", "type", "amount_sent", "currency_sent", "from", "amount_received", "currency_received", "to", "status", "info", "description"]}
+    data["transactions"].append(trans)
+
+    # Update balances
+    await update_balances(data, trans)
+    save_data(data)
+
+    # Format response message using config templates
+    if trans_type in SIMPLE_TRANSACTION_TYPES:
+        response_msg = MSG_TRANSACTION_ADDED_SIMPLE.format(
+            type=trans_type.capitalize(),
+            date=today,
+            amount=trans['amount_sent'],
+            currency=trans['currency_sent'],
+            account=trans['from'],
+            info=trans['info'] if trans['info'] else 'None'
         )
-        return ConversationHandler.END
-    except ValueError:
-        await update.message.reply_text(
-            "Invalid input. Enter the minutes again."
+    else:
+        response_msg = MSG_TRANSACTION_ADDED_FULL.format(
+            date=today,
+            description=trans['description'],
+            amount_sent=trans['amount_sent'],
+            currency_sent=trans['currency_sent'],
+            from_account=trans['from'],
+            amount_received=trans['amount_received'],
+            currency_received=trans['currency_received'],
+            to_account=trans['to'],
+            status=trans['status'],
+            info=trans['info']
         )
-        return CHORE_MINUTES
+
+    if hasattr(update, 'callback_query') and update.callback_query:
+        await update.callback_query.message.reply_text(response_msg, reply_markup=get_main_keyboard())
+    else:
+        await update.message.reply_text(response_msg, reply_markup=get_main_keyboard())
+    
+    return ConversationHandler.END
 
 
-# Show latest logged expenses
-async def list_expenses(update: Update, context: CallbackContext) -> None:
+async def update_balances(data, trans):
+    status = trans["status"]
+    from_acc = trans["from"]
+    to_acc = trans["to"]
+    sent_curr = trans["currency_sent"]
+    recv_curr = trans["currency_received"]
+    sent_amt = trans["amount_sent"]
+    recv_amt = trans["amount_received"]
+    trans_type = trans["type"]
+
+    if from_acc not in data["balances"]:
+        data["balances"][from_acc] = {"settled": {}, "pending": {}}
+    if to_acc and to_acc not in data["balances"]:
+        data["balances"][to_acc] = {"settled": {}, "pending": {}}
+
+    if status == "closed":
+        # Subtract sent from from_acc settled
+        data["balances"][from_acc]["settled"][sent_curr] = data["balances"][from_acc]["settled"].get(sent_curr, 0) - sent_amt
+        # Add received to to_acc settled (if there's a destination account)
+        if to_acc and recv_amt > 0:
+            data["balances"][to_acc]["settled"][recv_curr] = data["balances"][to_acc]["settled"].get(recv_curr, 0) + recv_amt
+    else:
+        # Pending
+        data["balances"][from_acc]["pending"][sent_curr] = data["balances"][from_acc]["pending"].get(sent_curr, 0) - sent_amt
+        if to_acc and recv_amt > 0:
+            data["balances"][to_acc]["pending"][recv_curr] = data["balances"][to_acc]["pending"].get(recv_curr, 0) + recv_amt
+
+    # Update spending categories using config
+    if trans_type in SPENDING_CATEGORIES:
+        cat = data["spending_categories"].get(trans_type, {"transactions": [], "total": {}})
+        cat["transactions"].append(trans)
+        cat["total"][sent_curr] = cat["total"].get(sent_curr, 0) + sent_amt
+        data["spending_categories"][trans_type] = cat
+
+
+# List transactions
+async def list_transactions(update: Update, context: CallbackContext) -> None:
     data = load_data()
-    if not data.get("expenses"):
+    if not data.get("transactions"):
         await update.message.reply_text(
-            "No expenses recorded yet.", reply_markup=get_main_keyboard()
+            MSG_NO_TRANSACTIONS, reply_markup=get_main_keyboard()
         )
         return
-    items = data["expenses"][-EXPENSE_LIST_LIMIT:][::-1]
-    lines = []
-    for e in items:
-        date = e.get("date", "?")
-        desc = e.get("description", "(no description)")
-        amt = e.get("amount", 0.0)
-        payer = e.get("payer", "?")
-        split = ", ".join(e.get("split_with", [])) or "-"
+    items = data["transactions"][-TRANSACTION_LIST_LIMIT:][::-1]
+    lines = [TABLE_HEADER, TABLE_SEPARATOR]
+    for t in items:
         lines.append(
-            f"{date} — {desc} — {amt:.2f}€ | Payer: {payer} | Split: {split}"
+            f"| {t.get('date', '?')} | {t.get('type', '?')} | {t.get('amount_sent', 0)} | {t.get('currency_sent', '?')} | {t.get('from', '?')} | {t.get('amount_received', 0)} | {t.get('currency_received', '?')} | {t.get('to', '?')} | {t.get('status', '?')} | {t.get('info', '?')} |"
         )
-    text = "Recent Expenses:\n" + "\n".join(lines)
+    text = REPORT_HEADER_TRANSACTIONS + "\n" + "\n".join(lines)
     await update.message.reply_text(text, reply_markup=get_main_keyboard())
 
 
-# Calculate + show standings
-async def standings(update: Update, context: CallbackContext) -> None:
+# Generate Report
+async def generate_report(update: Update, context: CallbackContext) -> None:
     data = load_data()
-    members = data.get("members", [])
-    if not members:
-        await update.message.reply_text(
-            "No members recorded yet.", reply_markup=get_main_keyboard()
-        )
-        return
+    transactions = data.get("transactions", [])
 
-    balances = {m: 0.0 for m in members}
+    # Transactions Log using config header
+    log = f"{REPORT_HEADER_LOG}\n\n{TABLE_HEADER_FULL}\n"
+    for t in transactions:
+        log += f"| {t['date']} | {t['type']} | {t['amount_sent']} | {t['currency_sent']} | {t['from']} | {t['amount_received']} | {t['currency_received']} | {t['to']} | {t['status']} | {t['info']} |\n"
 
-    for expense in data.get("expenses", []):
-        payer = expense.get("payer", "")
-        amount = float(expense.get("amount", 0.0))
-        split_with = expense.get("split_with", []) or []
-        if not split_with:
-            continue
-        share = amount / len(split_with)
+    # Accounts using config header
+    accounts_str = f"\n---\n{REPORT_HEADER_ACCOUNTS}\n"
+    for acc in data.get("accounts", []):
+        accounts_str += f"## {acc}\n"
+        acc_trans = [t for t in transactions if t['from'] == acc or t['to'] == acc]
+        for t in acc_trans:
+            direction = "Sent" if t['from'] == acc else "Received"
+            opp_acc = t['to'] if t['from'] == acc else t['from']
+            accounts_str += f"- {t['date']} | {t['type']} | {direction} {t['amount_sent']} {t['currency_sent']} → {opp_acc} | {t['status']}  \n"
+        
+        settled_balances = data["balances"].get(acc, {"settled": {}}).get("settled", {})
+        pending_balances = data["balances"].get(acc, {"pending": {}}).get("pending", {})
+        
+        settled = ", ".join([f"{curr}: {amt}" for curr, amt in settled_balances.items() if amt != 0])
+        pending = ", ".join([f"{curr}: {amt}" for curr, amt in pending_balances.items() if amt != 0])
+        
+        accounts_str += f"**Balance:**  \n- {REPORT_BALANCE_SETTLED}: {settled or 'None'}  \n- {REPORT_BALANCE_PENDING}: {pending or 'None'}\n---\n"
 
-        payer_key = next((m for m in members if m.lower() == payer.lower()), None)
-        if payer_key:
-            balances[payer_key] = balances.get(payer_key, 0.0) + amount
+    # Spending using config header
+    spending = f"\n{REPORT_HEADER_SPENDING}\n"
+    for cat_name, cat in data.get("spending_categories", {}).items():
+        if cat_name in SPENDING_CATEGORIES:  # Only show configured spending categories
+            spending += f"## {cat_name.capitalize()}\n"
+            for t in cat.get("transactions", []):
+                spending += f"{t['date']} | {t['amount_sent']} {t['currency_sent']} | {t['info']}\n"
+            totals = " ".join([f"{curr}: {amt}" for curr, amt in cat.get("total", {}).items()])
+            spending += f"Total | {totals}\n"
 
-        for u in split_with:
-            u_key = next((m for m in members if m.lower() == u.lower()), None)
-            if u_key:
-                balances[u_key] = balances.get(u_key, 0.0) - share
-
-    chores = {}
-    for name, pts in (data.get("chores", {}) or {}).items():
-        mkey = next((m for m in members if m.lower() == name.lower()), None)
-        if mkey:
-            chores[mkey] = pts
-
-    ordered = sorted(members, key=lambda m: (chores.get(m, 0)), reverse=True)
-
-    lines = []
-    for m in ordered:
-        points = chores.get(m, 0)
-        bal = balances.get(m, 0.0)
-        lines.append(f"{m}: {points} points, {bal:+.2f}€")
-
-    await update.message.reply_text("\n".join(lines), reply_markup=get_main_keyboard())
-
-
-# Beer owed
-async def beer_owed(update: Update, context: CallbackContext) -> None:
-    data = load_data()
-    leaderboard = sorted(data["chores"].items(), key=lambda x: -x[1])
-    if not leaderboard:
-        await update.message.reply_text("No chores recorded yet.")
-        return
-
-    leader_points = leaderboard[0][1]
-    violators = []
-
-    for user, points in leaderboard[1:]:
-        if leader_points - points > 4:
-            weeks_lagging = data["penalties"].get(user, 0) + 1
-            data["penalties"][user] = weeks_lagging
-            violators.append(f"{user} owes {weeks_lagging} beers!")
-
-    save_data(data)
-    if violators:
-        await update.message.reply_text(
-            "Beer Penalties:\n" + "\n".join(violators)
-        )
-    else:
-        await update.message.reply_text("No penalties this week!")
-
-
-# Weekly report handling
-async def set_weekly_report(update: Update, context: CallbackContext) -> None:
-    data = load_data()
-
-    if update.effective_chat.type in ["group", "supergroup"]:
-        data["group_chat_id"] = update.effective_chat.id
-        save_data(data)
-        await update.message.reply_text(
-            "Weekly reports will be sent to this group every Monday!"
-        )
-    else:
-        if "group_chat_id" in data:
-            await update.message.reply_text(
-                "Weekly reports are set to be sent to a group chat. To change the group, use this command in the new group chat."
-            )
-        else:
-            await update.message.reply_text(
-                "Please use this command in the group chat where you want the weekly reports to be sent."
-            )
-
-
-async def check_weekly_penalties(context: CallbackContext) -> None:
-    data = load_data()
-
-    if "group_chat_id" not in data:
-        logger.warning("No group chat ID set for weekly reports")
-        return
-
-    group_id = data["group_chat_id"]
-
-    if not data["members"] or not data["chores"]:
-        try:
-            await context.bot.send_message(
-                chat_id=group_id,
-                text="Weekly Report: Not enough data to calculate penalties. Make sure members are added and chores are recorded."
-            )
-        except TelegramError as e:
-            logger.error(f"Failed to send weekly report: {e}")
-        return
-
-    chores_normalized = {}
-    for chore_user, points in data["chores"].items():
-        for member in data["members"]:
-            if member.lower() == chore_user.lower():
-                chores_normalized[member] = points
-                break
-
-    leaderboard = sorted(
-        [(member, chores_normalized.get(member, 0)) for member in data["members"]],
-        key=lambda x: -x[1],
-    )
-
-    if not leaderboard:
-        return
-
-    leader, leader_points = leaderboard[0]
-    violators = []
-
-    for member, points in leaderboard[1:]:
-        if leader_points - points > 4:
-            last_week_violator = data.get("last_week_violators", {}).get(
-                member.lower(), False
-            )
-            if last_week_violator:
-                weeks_lagging = data["penalties"].get(member, 0) + 1
-                data["penalties"][member] = weeks_lagging
-                violators.append(f"{member} owes {weeks_lagging} beers! 🍺")
-            else:
-                if "last_week_violators" not in data:
-                    data["last_week_violators"] = {}
-                data["last_week_violators"][member.lower()] = True
-                violators.append(
-                    f"{member} is lagging by {leader_points - points} points behind {leader}. If not improved by next week, beer penalty will apply! ⚠️"
-                )
-        elif member.lower() in data.get("last_week_violators", {}):
-            data["last_week_violators"].pop(member.lower(), None)
-            violators.append(
-                f"{member} has improved their standing! No beer penalty this week. 👍"
-            )
-
-    save_data(data)
-
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    if violators:
-        report = f"Weekly Chore Report ({current_date}):\n\n"
-        report += f"Leader: {leader} with {leader_points} points\n\n"
-        report += "Penalties:\n" + "\n".join(violators)
-    else:
-        report = f"Weekly Chore Report ({current_date}):\n\n"
-        report += f"Leader: {leader} with {leader_points} points\n\n"
-        report += "Everyone is keeping up with their chores! No penalties this week. 🎉"
-
-    try:
-        await context.bot.send_message(chat_id=group_id, text=report)
-    except TelegramError as e:
-        logger.error(f"Failed to send weekly report: {e}")
-
-
-def setup_weekly_job(application):
-    target_time = datetime.now(pytz.timezone("Europe/Berlin"))
-    target_time = target_time.replace(hour=9, minute=0, second=0, microsecond=0)
-
-    if target_time.weekday() != 0 or datetime.now(pytz.timezone("Europe/Berlin")) > target_time:
-        days_until_monday = (7 - target_time.weekday()) % 7
-        if days_until_monday == 0:
-            days_until_monday = 7
-        target_time = target_time + timedelta(days=days_until_monday)
-
-    current_time = datetime.now(pytz.timezone("Europe/Berlin"))
-    seconds_until_target = (target_time - current_time).total_seconds()
-
-    application.job_queue.run_repeating(
-        check_weekly_penalties,
-        interval=timedelta(days=7).total_seconds(),
-        first=seconds_until_target,
-        name="weekly_penalty_check",
-    )
-    logger.info(
-        f"Weekly report scheduled for {target_time.strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+    full_report = log + accounts_str + spending
+    await update.message.reply_text(full_report, reply_markup=get_main_keyboard())
 
 
 async def send_alive(context: CallbackContext) -> None:
     """Send a periodic heartbeat message to confirm the bot is running."""
-    try:
-        await context.bot.send_message(chat_id=BOT_HANDLER_ID, text="I'm alive")
-    except TelegramError as e:
-        logger.error(f"Failed to send heartbeat: {e}")
+    logger.info("Bot heartbeat - I'm alive!")
 
 
 async def cancel(update: Update, context: CallbackContext) -> int:
     await update.message.reply_text(
-        "Cancelled. Back to main menu.", reply_markup=get_main_keyboard()
+        MSG_CANCELLED, reply_markup=get_main_keyboard()
     )
     return ConversationHandler.END
 
@@ -575,10 +590,91 @@ async def on_timeout(update: Update, context: CallbackContext) -> int:
     if chat:
         await context.bot.send_message(
             chat_id=chat.id,
-            text="Session timed out. Back to main menu.",
+            text=MSG_SESSION_TIMEOUT,
             reply_markup=get_main_keyboard(),
         )
     return ConversationHandler.END
+
+
+
+async def generate_image_report(update: Update, context: CallbackContext) -> None:
+    data = load_data()
+    transactions = data.get("transactions", [])
+
+    # Reuse the same report generation logic as `generate_report`
+    log = f"{REPORT_HEADER_LOG}\n\n{TABLE_HEADER_FULL}\n"
+    for t in transactions:
+        log += f"| {t['date']} | {t['type']} | {t['amount_sent']} | {t['currency_sent']} | {t['from']} | {t['amount_received']} | {t['currency_received']} | {t['to']} | {t['status']} | {t['info']} |\n"
+
+    accounts_str = f"\n---\n{REPORT_HEADER_ACCOUNTS}\n"
+    for acc in data.get("accounts", []):
+        accounts_str += f"## {acc}\n"
+        acc_trans = [t for t in transactions if t['from'] == acc or t['to'] == acc]
+        for t in acc_trans:
+            direction = "Sent" if t['from'] == acc else "Received"
+            opp_acc = t['to'] if t['from'] == acc else t['from']
+            accounts_str += f"- {t['date']} | {t['type']} | {direction} {t['amount_sent']} {t['currency_sent']} → {opp_acc} | {t['status']}  \n"
+        
+        settled_balances = data["balances"].get(acc, {"settled": {}}).get("settled", {})
+        pending_balances = data["balances"].get(acc, {"pending": {}}).get("pending", {})
+        
+        settled = ", ".join([f"{curr}: {amt}" for curr, amt in settled_balances.items() if amt != 0])
+        pending = ", ".join([f"{curr}: {amt}" for curr, amt in pending_balances.items() if amt != 0])
+        
+        accounts_str += f"**Balance:** \n- {REPORT_BALANCE_SETTLED}: {settled or 'None'}  \n- {REPORT_BALANCE_PENDING}: {pending or 'None'}\n---\n"
+
+    spending = f"\n{REPORT_HEADER_SPENDING}\n"
+    for cat_name, cat in data.get("spending_categories", {}).items():
+        if cat_name in SPENDING_CATEGORIES:
+            spending += f"## {cat_name.capitalize()}\n"
+            for t in cat.get("transactions", []):
+                spending += f"{t['date']} | {t['amount_sent']} {t['currency_sent']} | {t['info']}\n"
+            totals = " ".join([f"{curr}: {amt}" for curr, amt in cat.get("total", {}).items()])
+            spending += f"Total | {totals}\n"
+
+    full_report = log + accounts_str + spending
+
+    # Convert Markdown to HTML with a basic stylesheet for readability
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Finance Report</title>
+        <style>
+            body {{ font-family: monospace; font-size: 14px; white-space: pre; }}
+            pre {{ margin: 0; }}
+            h1, h2 {{ margin-top: 20px; }}
+            table {{ border-collapse: collapse; }}
+            th, td {{ border: 1px solid black; padding: 5px; }}
+        </style>
+    </head>
+    <body>
+        <pre>{full_report}</pre>
+    </body>
+    </html>
+    """
+    
+    # Render HTML to image
+    image_path = "report.png"
+    try:
+        HTML(string=html_content).write_png(image_path)
+        await update.message.reply_photo(
+            photo=open(image_path, 'rb'),
+            reply_markup=get_main_keyboard(),
+            caption="Here is your report as an image."
+        )
+    except Exception as e:
+        logger.error(f"Error generating image report: {e}")
+        await update.message.reply_text(
+            "Sorry, there was an error generating the image report. Please try again later.",
+            reply_markup=get_main_keyboard()
+        )
+    finally:
+        # Clean up the generated file
+        if os.path.exists(image_path):
+            os.remove(image_path)
+
+
 
 
 def main():
@@ -586,32 +682,20 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("expenses", list_expenses))
     app.add_handler(CommandHandler("cancel", cancel))
 
-    app.add_handler(MessageHandler(filters.Regex("^Standings$"), standings))
-    app.add_handler(MessageHandler(filters.Regex("^List Expenses$"), list_expenses))
-    app.add_handler(MessageHandler(filters.Regex("^Check Beer Owed$"), beer_owed))
-    app.add_handler(MessageHandler(filters.Regex("^Set Weekly Report$"), set_weekly_report))
-    app.add_handler(MessageHandler(filters.Regex("^Cancel$"), cancel))
+    # Use config button labels for message handlers
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_LIST_TRANSACTIONS}$"), list_transactions))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_GENERATE_REPORT}$"), generate_report))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_GENERATE_IMAGE_REPORT}$"), generate_image_report))
+    app.add_handler(MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel))
 
-    expense_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^Add Expense$"), start_expense)],
+    # Delete all data conversation handler
+    delete_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{BTN_DELETE_ALL_DATA}$"), delete_all_data)],
         states={
-            EXPENSE_DESCRIPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_description)
-            ],
-            EXPENSE_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, expense_amount)
-            ],
-            EXPENSE_PAYER: [
-                CallbackQueryHandler(expense_payer_cb, pattern=f"^{CB_PAYER_PREFIX}")
-            ],
-            EXPENSE_SPLIT: [
-                CallbackQueryHandler(
-                    expense_split_cb,
-                    pattern=r"^(?:split_toggle:.*|split_done|split_back|split_cancel)$",
-                )
+            CONFIRM_DELETE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_delete)
             ],
             ConversationHandler.TIMEOUT: [
                 MessageHandler(filters.ALL, on_timeout)
@@ -619,17 +703,62 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            MessageHandler(filters.Regex("^Cancel$"), cancel),
+            MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel),
         ],
-        conversation_timeout=300,
+        conversation_timeout=CONVERSATION_TIMEOUT,
+        per_message=False,
     )
-    app.add_handler(expense_conv)
+    app.add_handler(delete_conv)
+
+    trans_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(f"^{BTN_ADD_TRANSACTION}$"), start_transaction)],
+        states={
+            TRANS_TYPE: [
+                CallbackQueryHandler(trans_type_cb, pattern=f"^{CB_TYPE_PREFIX}")
+            ],
+            TRANS_AMOUNT_SENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, trans_amount_sent)
+            ],
+            TRANS_CURRENCY_SENT: [
+                CallbackQueryHandler(trans_currency_sent_cb, pattern=f"^{CB_CURRENCY_SENT_PREFIX}")
+            ],
+            TRANS_FROM: [
+                CallbackQueryHandler(trans_from_cb, pattern=f"^{CB_FROM_PREFIX}")
+            ],
+            TRANS_AMOUNT_RECEIVED: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, trans_amount_received)
+            ],
+            TRANS_CURRENCY_RECEIVED: [
+                CallbackQueryHandler(trans_currency_received_cb, pattern=f"^{CB_CURRENCY_RECEIVED_PREFIX}")
+            ],
+            TRANS_TO: [
+                CallbackQueryHandler(trans_to_cb, pattern=f"^{CB_TO_PREFIX}")
+            ],
+            TRANS_STATUS: [
+                CallbackQueryHandler(trans_status_cb, pattern=f"^{CB_STATUS_PREFIX}")
+            ],
+            TRANS_INFO: [
+                CallbackQueryHandler(trans_info_cb, pattern=f"^{CB_INFO_PREFIX}"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, trans_info_text)
+            ],
+            ConversationHandler.TIMEOUT: [
+                MessageHandler(filters.ALL, on_timeout)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel),
+        ],
+        conversation_timeout=CONVERSATION_TIMEOUT,
+        per_message=False,
+    )
+    app.add_handler(trans_conv)
 
     manage_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^Manage Members$"), manage_members)],
+        entry_points=[MessageHandler(filters.Regex(f"^{BTN_MANAGE_ACCOUNTS}$"), manage_accounts)],
         states={
-            MANAGE_MEMBER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, modify_members)
+            MANAGE_ACCOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, modify_accounts)
             ],
             ConversationHandler.TIMEOUT: [
                 MessageHandler(filters.ALL, on_timeout)
@@ -637,40 +766,25 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            MessageHandler(filters.Regex("^Cancel$"), cancel),
+            MessageHandler(filters.Regex(f"^{BTN_CANCEL}$"), cancel),
         ],
-        conversation_timeout=300,
+        conversation_timeout=CONVERSATION_TIMEOUT,
+        per_message=False,
     )
     app.add_handler(manage_conv)
 
-    chore_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^Add Chore$"), start_chore)],
-        states={
-            CHORE_USER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, chore_user)
-            ],
-            CHORE_MINUTES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, chore_minutes)
-            ],
-            ConversationHandler.TIMEOUT: [
-                MessageHandler(filters.ALL, on_timeout)
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            MessageHandler(filters.Regex("^Cancel$"), cancel),
-        ],
-        conversation_timeout=300,
-    )
-    app.add_handler(chore_conv)
+    # Only add job queue if it's available
+    try:
+        if app.job_queue:
+            app.job_queue.run_repeating(
+                send_alive,
+                interval=timedelta(hours=HEARTBEAT_INTERVAL_HOURS).total_seconds(),
+                first=0,
+                name="heartbeat",
+            )
+    except Exception as e:
+        logger.warning(f"JobQueue not available: {e}. Bot will run without heartbeat.")
 
-    setup_weekly_job(app)
-    app.job_queue.run_repeating(
-        send_alive,
-        interval=timedelta(hours=4).total_seconds(),
-        first=0,
-        name="heartbeat",
-    )
     logger.info("Bot running...")
     app.run_polling()
 
