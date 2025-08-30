@@ -1,5 +1,3 @@
-# TelegramParaBot
+# ParaBot
 
-Inspired by @usukenshin
-
-t.me/MillionParaBot
+Financial Tracking in Telegram Inspired by https://github.com/usukenshin/wg-cop
