@@ -1,27 +1,20 @@
 # BOT CONFIGURATION FILE
 
-## Enter your bot token and handler ID below
+## Enter your bot token below
 
 TOKEN = 'YOUR_BOT_TOKEN'
-BOT_HANDLER_ID = 'YOUR_BOT_HANDLER'
 
 
 # TRANSACTION SETTINGS
 
 # Available currencies for selection
-CURRENCIES = ["CHF", "EUR", "USD", "ETH", "BTC"]
+CURRENCIES = ["CHF", "EUR", "USD"]
 
 # Transaction types available
-TRANSACTION_TYPES = ["withdrawal", "trade", "admin", "debt", "snack", "groceries", "subscription", "drink"]
-
-# Transaction statuses
-TRANSACTION_STATUSES = ["open", "closed"]
-
-# Transaction types that get simplified flow (no received amount/currency)
-SIMPLE_TRANSACTION_TYPES = ["admin", "groceries", "snack", "subscription", "drink"]
+TRANSACTION_TYPES = ["snack", "groceries", "subscription", "drink", "transport"]
 
 # Categories that get tracked in spending reports
-SPENDING_CATEGORIES = ["admin", "snack", "groceries", "subscription", "drink"]
+SPENDING_CATEGORIES = ["snack", "groceries", "subscription", "drink", "transport"]
 
 
 # BOT BEHAVIOR SETTINGS
@@ -32,12 +25,8 @@ TRANSACTION_LIST_LIMIT = 20
 # How long conversations stay active (seconds)
 CONVERSATION_TIMEOUT = 300  # 5 minutes
 
-# How often to log heartbeat (hours)
-HEARTBEAT_INTERVAL_HOURS = 4
-
 # Data file location
 DATA_FILE = "finance_data.json"
-TEMP_HTML_FILE = "temp_report.html"
 
 
 # BUTTON LABELS
@@ -46,13 +35,10 @@ BTN_ADD_TRANSACTION = "Add Transaction"
 BTN_LIST_TRANSACTIONS = "List Transactions"
 BTN_GENERATE_REPORT = "Generate Report"
 BTN_MANAGE_ACCOUNTS = "Manage Accounts"
-BTN_DELETE_ALL_DATA = "Delete All Data"
 BTN_CANCEL = "Cancel"
 BTN_BACK = "Back"
-BTN_DONE = "Done"
 BTN_YES = "Yes"
 BTN_NONE = "None"
-BTN_GENERATE_IMAGE_REPORT = "Generate Report (Image)"
 
 
 # MAIN MESSAGES 
@@ -68,10 +54,6 @@ MSG_SELECT_TYPE = "What type of transaction is this?"
 MSG_ENTER_AMOUNT_SENT = "How much did you spend?"
 MSG_SELECT_CURRENCY = "Which currency?"
 MSG_SELECT_FROM_ACCOUNT = "From which account?"
-MSG_ENTER_AMOUNT_RECEIVED = "How much did you receive?"
-MSG_SELECT_CURRENCY_RECEIVED = "In which currency did you receive?"
-MSG_SELECT_TO_ACCOUNT = "To which account?"
-MSG_SELECT_STATUS = "What's the transaction status?"
 MSG_ADD_INFO_QUESTION = "Add details?"
 MSG_ADD_INFO_DETAILS = "Would you like to add more information?"
 MSG_ENTER_INFO = "Enter additional details:"
@@ -87,7 +69,6 @@ MSG_USE_MANAGE_ACCOUNTS = "Please use 'Manage Accounts' to add accounts first."
 
 # Error messages
 MSG_INVALID_AMOUNT = "Invalid amount. Please enter a number (e.g., 50 or 12.5)."
-MSG_INVALID_AMOUNT_RECEIVED = "Invalid amount. Please enter a number (e.g., 0.6 or 100)."
 MSG_NO_TRANSACTIONS = "No transactions recorded yet."
 
 # Success messages for transactions
@@ -99,42 +80,20 @@ Account: {account}
 Details: {info}
 """
 
-MSG_TRANSACTION_ADDED_FULL = """
-Transaction completed!
-Date: {date}
-Description: {description}
-Sent: {amount_sent} {currency_sent} from {from_account}
-Received: {amount_received} {currency_received} to {to_account}
-Status: {status}
-Details: {info}
-"""
-
-# Data management
-MSG_CONFIRM_DELETE = "DANGER ZONE\n\nThis will permanently delete ALL your financial data!\n\nType exactly 'DELETE ALL DATA' to confirm\nType anything else to cancel"
-MSG_DATA_DELETED = "All financial data has been permanently deleted!"
-MSG_DELETE_CANCELLED = "Data deletion cancelled. Your data is safe."
-CONFIRM_DELETE_TEXT = "DELETE ALL DATA"
-
 # Report headers
 REPORT_HEADER_TRANSACTIONS = "Your Recent Transactions:"
 REPORT_HEADER_LOG = "# Complete Transaction Log"
 REPORT_HEADER_ACCOUNTS = "# Account Summary"
 REPORT_HEADER_SPENDING = "# Spending by Category"
 REPORT_BALANCE_SETTLED = "Confirmed"
-REPORT_BALANCE_PENDING = "Pending"
 
 # Description templates for auto-generated transaction descriptions
 DESC_TEMPLATE_SIMPLE = "{type} - {amount} {currency}"
-DESC_TEMPLATE_COMPLEX = "{type} transaction"
 
 
 # ADVANCED SETTINGS
 
 
 # Table formatting
-TABLE_HEADER = "| Date | Type | Sent | Currency | From | Received | Currency | To | Status | Info |"
-TABLE_SEPARATOR = "|---|---|---|---|---|---|---|---|---|---|"
-
-# Log table format for reports
-TABLE_HEADER_FULL = """| Date       | Type        | Sent    | Currency | From     | Received | Currency | To      | Status | Info            |
-"|---|---|---|---|---|---|---|---|---|---|"""
+TABLE_HEADER = "| Date | Type | Sent | Currency | From | Info |"
+TABLE_SEPARATOR = "|---|---|---|---|---|---|"
